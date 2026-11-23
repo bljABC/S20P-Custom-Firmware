@@ -1,0 +1,125 @@
+name: Build CLX S20P
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-s20p.yml'
+      - 'scripts/**'
+      - 'README.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s20p-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache cmake cpio curl device-tree-compiler \
+            fastjar flex gawk gettext git g++ gperf haveged help2man \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libreadline-dev libssl-dev libtool \
+            lz4 mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf \
+            python3 python3-dev python3-pip python3-ply python3-docutils \
+            qemu-utils rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip vim wget xmlto xxd zlib1g-dev
+
+      - name: Clone ImmortalWrt MT798x source
+        run: |
+          git clone --depth 1 --branch 25.12 \
+            https://github.com/chasey-dev/immortalwrt-mt798x-rebase.git openwrt
+          cd openwrt
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Load original CLX S20P configuration
+        run: |
+          cd openwrt
+          curl -fL --retry 3 \
+            https://raw.githubusercontent.com/Jameslau-tech/ActionsOpenWrtMT798X/main/25.12/mt7986-clx-s20p.config \
+            -o .config
+          test -s .config
+          grep -Fqx 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_clx_s20p=y' .config
+          grep -Fqx 'CONFIG_MTK_MT_WIFI_DRIVER_VERSION_7673=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_kmod-mediatek_hnat=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_kmod-warp=y' .config
+
+      - name: Add OpenClash and Diskman source packages
+        run: |
+          cd openwrt
+          mkdir -p package/custom
+          git clone --depth 1 https://github.com/vernesong/OpenClash.git package/custom/openclash-src
+          test -f package/custom/openclash-src/luci-app-openclash/Makefile
+          ln -s openclash-src/luci-app-openclash package/custom/luci-app-openclash
+
+          git clone --depth 1 https://github.com/sbwml/luci-app-diskman.git /tmp/luci-app-diskman-src
+          test -f /tmp/luci-app-diskman-src/luci-app-diskman/Makefile
+          cp -a /tmp/luci-app-diskman-src/luci-app-diskman package/custom/luci-app-diskman
+          echo "OPENCLASH_COMMIT=$(git -C package/custom/openclash-src rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "DISKMAN_COMMIT=$(git -C /tmp/luci-app-diskman-src rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Apply requested package selection
+        run: |
+          cd openwrt
+          bash "$GITHUB_WORKSPACE/scripts/apply-packages.sh"
+
+      - name: Resolve and verify configuration
+        run: |
+          cd openwrt
+          make defconfig
+          bash "$GITHUB_WORKSPACE/scripts/verify-packages.sh"
+          cp .config "$GITHUB_WORKSPACE/s20p-final.config"
+
+      - name: Download sources
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -delete
+
+      - name: Build firmware
+        run: |
+          cd openwrt
+          make -j"$(nproc)" || make -j1 V=s
+
+      - name: Collect firmware and build metadata
+        if: success()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          find openwrt/bin/targets/mediatek/filogic -maxdepth 1 -type f \
+            \( -name '*.bin' -o -name '*.manifest' -o -name '*.json' \) \
+            -exec cp -v {} "$GITHUB_WORKSPACE/output/" \;
+          cp s20p-final.config output/
+          {
+            printf 'Source commit: %s\n' "$SOURCE_COMMIT"
+            printf 'OpenClash commit: %s\n' "$OPENCLASH_COMMIT"
+            printf 'Diskman commit: %s\n' "$DISKMAN_COMMIT"
+          } > output/BUILD-INFO.txt
+          (cd output && sha256sum *.bin > SHA256SUMS.txt)
+          test -n "$(find output -maxdepth 1 -name '*sysupgrade*.bin' -print -quit)"
+
+      - name: Upload firmware artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S20P-firmware
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
