@@ -74,7 +74,7 @@ jobs:
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install luci-app-ttyd luci-app-samba4
 
       - name: Apply requested package selection
         run: |
