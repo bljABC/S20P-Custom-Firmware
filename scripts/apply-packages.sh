@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -21,6 +22,7 @@ while IFS= read -r line; do
         printf '# CONFIG_PACKAGE_%s is not set\n' "${BASH_REMATCH[1]}" >> "$tmp"
         continue
     fi
+
     printf '%s\n' "$line" >> "$tmp"
 done < .config
 mv "$tmp" .config
@@ -29,6 +31,7 @@ mv "$tmp" .config
 set_symbol() {
     local symbol="$1" value="$2"
     sed -i -E "/^(CONFIG_${symbol}=|# CONFIG_${symbol} is not set)/d" .config
+
     if [[ "$value" == y ]]; then
         printf 'CONFIG_%s=y\n' "$symbol" >> .config
     else
@@ -43,17 +46,26 @@ for pkg in \
     set_symbol "PACKAGE_${pkg}" y
 done
 
-# Keep the standard mount-point backend and common USB-disk filesystems.
-for pkg in block-mount automount blkid lsblk fdisk gdisk dosfstools \
-           kmod-fs-ext4 e2fsprogs kmod-fs-vfat kmod-fs-exfat exfat-mkfs \
-           kmod-fs-f2fs f2fs-tools f2fsck mkf2fs blockdev losetup; do
+# Runtime dependencies required by OpenClash and Diskman.
+for pkg in \
+    bash curl ruby ruby-yaml unzip xfs-mkfs; do
     set_symbol "PACKAGE_${pkg}" y
 done
+
+# Keep the standard mount-point backend and common USB-disk filesystems.
+for pkg in \
+    block-mount automount blkid lsblk fdisk gdisk dosfstools \
+    kmod-fs-ext4 e2fsprogs kmod-fs-vfat kmod-fs-exfat exfat-mkfs \
+    kmod-fs-f2fs f2fs-tools f2fsck mkf2fs blockdev losetup; do
+    set_symbol "PACKAGE_${pkg}" y
+done
+
 set_symbol 'DEFAULT_block-mount' y
 set_symbol 'DEFAULT_automount' y
 
 # Samba4 replaces ksmbd; never ship both SMB server implementations.
-for pkg in luci-app-ksmbd ksmbd-hotplug ksmbd-avahi-service kmod-fs-ksmbd; do
+for pkg in \
+    luci-app-ksmbd ksmbd-hotplug ksmbd-avahi-service kmod-fs-ksmbd; do
     set_symbol "PACKAGE_${pkg}" n
 done
 
