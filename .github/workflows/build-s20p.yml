@@ -139,6 +139,53 @@ jobs:
           cd openwrt
           make -j"$(nproc)" || make -j1 V=s
 
+      - name: Verify S20P sysupgrade image metadata
+        run: |
+          cd openwrt
+
+          IMAGE="$(find bin/targets/mediatek/filogic -maxdepth 1 \
+            -name '*clx_s20p*sysupgrade*.bin' -print -quit)"
+
+          test -n "$IMAGE" || {
+            echo "ERROR: CLX S20P sysupgrade image not found"
+            exit 1
+          }
+
+          echo "Checking firmware metadata: $IMAGE"
+          fwtool -q -i /tmp/s20p-metadata.json "$IMAGE" || {
+            echo "ERROR: sysupgrade image has no valid fwtool metadata"
+            exit 1
+          }
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          metadata = json.loads(Path("/tmp/s20p-metadata.json").read_text())
+          compat = str(metadata.get("compat_version", "1.0"))
+          supported_key = "supported_devices" if compat == "1.0" else "new_supported_devices"
+          supported = metadata.get(supported_key, [])
+
+          if "clx,s20p" not in supported:
+              raise SystemExit(
+                  "ERROR: metadata does not explicitly support clx,s20p; "
+                  f"{supported_key}={supported!r}"
+              )
+
+          if compat != "1.0":
+              raise SystemExit(
+                  "ERROR: S20P build declares unexpected compat_version "
+                  f"{compat!r}; review upgrade compatibility before publishing"
+              )
+
+          version = metadata.get("version", {})
+          print("Metadata validation passed")
+          print(f"compat_version: {compat}")
+          print(f"supported_devices: {supported}")
+          print(f"target: {version.get('target', 'unknown')}")
+          print(f"board: {version.get('board', 'unknown')}")
+          PY
+
       - name: Collect firmware and build metadata
         if: success()
         run: |
