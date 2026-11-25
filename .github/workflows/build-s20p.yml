@@ -107,6 +107,64 @@ jobs:
           make download -j8
           find dl -size -1024c -delete
 
+      - name: Disable Rust CI LLVM download
+        run: |
+          cd openwrt
+
+          # Prepare the Rust host source before the full build so its
+          # bootstrap.toml can be adjusted deterministically.
+          make package/feeds/packages/rust/host/prepare V=s
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          
+          candidates = list(Path("build_dir").glob("target-*/host/rustc-*-src/bootstrap.toml"))
+          if len(candidates) != 1:
+              raise SystemExit(
+                  f"Expected exactly one Rust bootstrap.toml, found {len(candidates)}: "
+                  + ", ".join(map(str, candidates))
+              )
+          
+          path = candidates[0]
+          text = path.read_text()
+          lines = text.splitlines()
+          out = []
+          in_llvm = False
+          llvm_seen = False
+          setting_written = False
+          
+          for line in lines:
+              section = re.match(r"^\\s*\\[([^]]+)\\]\\s*(?:#.*)?$", line)
+              if section:
+                  if in_llvm and not setting_written:
+                      out.append('download-ci-llvm = false')
+                      setting_written = True
+                  in_llvm = section.group(1).strip() == "llvm"
+                  llvm_seen = llvm_seen or in_llvm
+                  out.append(line)
+                  continue
+              if in_llvm and re.match(r"^\\s*download-ci-llvm\\s*=", line):
+                  if not setting_written:
+                      out.append('download-ci-llvm = false')
+                      setting_written = True
+                  continue
+              out.append(line)
+          
+          if in_llvm and not setting_written:
+              out.append('download-ci-llvm = false')
+              setting_written = True
+          if not llvm_seen:
+              if out and out[-1].strip():
+                  out.append("")
+              out.extend(["[llvm]", "download-ci-llvm = false"])
+          
+          path.write_text("\\n".join(out) + "\\n")
+          print(f"Configured {path}: [llvm] download-ci-llvm = false")
+          PY
+
+          grep -A2 '^\\[llvm\\]' "$(find build_dir -path '*/host/rustc-*-src/bootstrap.toml' -print -quit)"
+          
       - name: Build firmware
         run: |
           cd openwrt
