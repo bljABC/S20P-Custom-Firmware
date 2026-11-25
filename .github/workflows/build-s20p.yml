@@ -110,57 +110,29 @@ jobs:
       - name: Disable Rust CI LLVM download
         run: |
           cd openwrt
-
-          # Prepare the Rust host source before the full build so its
-          # bootstrap.toml can be adjusted deterministically.
-          make package/feeds/packages/rust/host/prepare V=s
-
           python3 - <<'PY'
           from pathlib import Path
 
-          candidates = list(Path("build_dir").glob("target-*/host/rustc-*-src/bootstrap.toml"))
-          if len(candidates) != 1:
+          path = Path("feeds/packages/lang/rust/Makefile")
+          content = path.read_text()
+
+          enabled = "--set=llvm.download-ci-llvm=true"
+          disabled = "--set=llvm.download-ci-llvm=false"
+
+          if enabled in content:
+              content = content.replace(enabled, disabled)
+              path.write_text(content)
+          elif disabled not in content:
               raise SystemExit(
-                  f"Expected exactly one Rust bootstrap.toml, found {len(candidates)}: "
-                  + ", ".join(map(str, candidates))
+                  f"Could not find Rust LLVM download setting in {path}; "
+                  "refusing to continue with an unverified configuration"
               )
 
-          path = candidates[0]
-          lines = path.read_text().splitlines()
-          output = []
-          in_llvm = False
-          llvm_seen = False
-          setting_written = False
+          if disabled not in path.read_text():
+              raise SystemExit("Rust LLVM download setting was not disabled")
 
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  if in_llvm and not setting_written:
-                      output.append("download-ci-llvm = false")
-                      setting_written = True
-                  in_llvm = stripped == "[llvm]"
-                  llvm_seen = llvm_seen or in_llvm
-                  output.append(line)
-              elif in_llvm and stripped.startswith("download-ci-llvm"):
-                  if not setting_written:
-                      output.append("download-ci-llvm = false")
-                      setting_written = True
-              else:
-                  output.append(line)
-
-          if in_llvm and not setting_written:
-              output.append("download-ci-llvm = false")
-              setting_written = True
-          if not llvm_seen:
-              if output and output[-1].strip():
-                  output.append("")
-              output.extend(["[llvm]", "download-ci-llvm = false"])
-
-          path.write_text("\n".join(output) + "\n")
-          print(f"Configured {path}: [llvm] download-ci-llvm = false")
+          print(f"Verified {path}: {disabled}")
           PY
-
-          grep -A2 '^\[llvm\]' "$(find build_dir -path '*/host/rustc-*-src/bootstrap.toml' -print -quit)"
 
       - name: Build firmware
         run: |
