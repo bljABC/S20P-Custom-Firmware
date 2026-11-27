@@ -151,9 +151,18 @@ jobs:
             exit 1
           }
 
+          # Build the host-side fwtool explicitly. It is not guaranteed to be on PATH.
+          make package/system/fwtool/host/compile
+
+          FWTOOL="$PWD/staging_dir/host/bin/fwtool"
+          if [ ! -x "$FWTOOL" ]; then
+            echo "ERROR: fwtool host binary was not built at $FWTOOL"
+            exit 1
+          fi
+
           echo "Checking firmware metadata: $IMAGE"
-          fwtool -q -i /tmp/s20p-metadata.json "$IMAGE" || {
-            echo "ERROR: sysupgrade image has no valid fwtool metadata"
+          "$FWTOOL" -q -i /tmp/s20p-metadata.json "$IMAGE" || {
+            echo "ERROR: fwtool could not extract valid sysupgrade metadata"
             exit 1
           }
 
